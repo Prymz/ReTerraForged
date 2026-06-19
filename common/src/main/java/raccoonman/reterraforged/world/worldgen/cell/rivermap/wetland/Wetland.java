@@ -92,7 +92,7 @@ public class Wetland {
         float blendedBed = NoiseUtil.lerp(bed, banks, 0.4F * discrepancyFactor);
 
         float edgeDistance = (1.0F - warpedDist) * this.radius;
-        float maxWetlandSlope = (float) Math.tan(Math.toRadians(18.0F));
+        float maxWetlandSlope = 0.325f; //(float) Math.tan(Math.toRadians(18.0F));
         float maxRise = edgeDistance * maxWetlandSlope;
         float thresholdHeight = blendedBed + maxRise;
 

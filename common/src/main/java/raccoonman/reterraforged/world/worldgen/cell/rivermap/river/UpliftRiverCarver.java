@@ -310,7 +310,7 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         progress = NoiseUtil.clamp(progress, 0.0F, 1.0F);
 
         // Flat terrain: subtle bank; Mountain: pronounced bank step
-        float bankSteps = NoiseUtil.lerp(4.0F, 2.0F, flatnessFactor);           // flat=2, mountain=4 — already correct
+        float bankSteps = NoiseUtil.lerp(4.0F, 2.0F, flatnessFactor);           // flat=2, mountain=4
         float bankEdgeWidth = NoiseUtil.lerp(0.4F, 0.7F, flatnessFactor);       // flat=0.7, mountain=0.4
         float bankTerraceStrength = NoiseUtil.lerp(0.8F, 0.5F, flatnessFactor);   // flat=0.5, mountain=0.8
         progress = applyTerracing(progress, terraceMask, drainageMask, bankSteps, bankEdgeWidth, bankTerraceStrength);
