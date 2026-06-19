@@ -219,6 +219,7 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         float heightDiscrepancy = originalTerrainHeight - targetValleyFloor;
 
         if (heightDiscrepancy > 0.0F) {
+            float mountainFactor = 1.0F - flatnessFactor;
             // Normalize discrepancy: 0 = terrain at valley floor, 1 = very high above
             float maxDiscrepancy = 200.0F * this.levels.unit; // tune this
             float discrepancyFactor = NoiseUtil.clamp(heightDiscrepancy / maxDiscrepancy, 0.0F, 1.0F);
@@ -232,7 +233,9 @@ public class UpliftRiverCarver implements RTFRiverCarver {
 
             // In high-discrepancy terrain, the outer part of zone 4 retains more original slope
             // Inner zones keep full carve influence
-            float carveInfluence = 1.0F - (distanceProgress * discrepancyFactor * 0.5F);
+            // Only strongly preserve original slope in steep/high-discrepancy terrain
+            float blendAmount = 0.5F * mountainFactor;
+            float carveInfluence = 1.0F - (distanceProgress * discrepancyFactor * blendAmount);
 
             finalHeight = NoiseUtil.lerp(originalTerrainHeight, finalHeight, carveInfluence);
         }
@@ -267,13 +270,13 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         progress = NoiseUtil.clamp(progress, 0.0F, 1.0F);
 
         // Flat terrain: subtle bank; Mountain: pronounced bank step
-        float bankSteps = NoiseUtil.lerp(4.0F, 2.0F, flatnessFactor);
-        float bankEdgeWidth = NoiseUtil.lerp(0.7F, 0.4F, flatnessFactor);
-        float bankTerraceStrength = NoiseUtil.lerp(0.5F, 0.8F, flatnessFactor);
+        float bankSteps = NoiseUtil.lerp(4.0F, 2.0F, flatnessFactor);           // flat=2, mountain=4 — already correct
+        float bankEdgeWidth = NoiseUtil.lerp(0.4F, 0.7F, flatnessFactor);       // flat=0.7, mountain=0.4
+        float bankTerraceStrength = NoiseUtil.lerp(0.8F, 0.5F, flatnessFactor);   // flat=0.5, mountain=0.8
         progress = applyTerracing(progress, terraceMask, drainageMask, bankSteps, bankEdgeWidth, bankTerraceStrength);
 
         // Drainage gullies are more aggressive on steep terrain
-        float drainageScale = NoiseUtil.lerp(0.15F, 0.4F, 1.0F - flatnessFactor);
+        float drainageScale = NoiseUtil.lerp(0.2F, 0.3F, 1.0F - flatnessFactor);
         float arc = progress * (1.0F - progress) * 4.0F;
         progress = Math.max(0.0F, progress - (drainageMask * drainageScale * arc));
 
@@ -295,9 +298,9 @@ public class UpliftRiverCarver implements RTFRiverCarver {
 
         // ADAPTIVE TERRACING: flat terrain gets fewer, wider steps;
         // mountains get more, sharper steps
-        float terrainSteps = NoiseUtil.lerp(7.0F, 3.0F, flatnessFactor);
-        float terrainEdgeWidth = NoiseUtil.lerp(0.6F, 0.25F, flatnessFactor);
-        float terrainTerraceStrength = NoiseUtil.lerp(0.5F, 0.8F, flatnessFactor);
+        float terrainSteps = NoiseUtil.lerp(7.0F, 3.0F, flatnessFactor);        // flat=3, mountain=7 — already correct
+        float terrainEdgeWidth = NoiseUtil.lerp(0.25F, 0.6F, flatnessFactor);     // flat=0.6, mountain=0.25
+        float terrainTerraceStrength = NoiseUtil.lerp(0.8F, 0.5F, flatnessFactor); // flat=0.5, mountain=0.8
         float modifiedProgress = applyTerracing(progress, terraceMask, drainageMask,
                 terrainSteps, terrainEdgeWidth, terrainTerraceStrength);
 
@@ -316,7 +319,8 @@ public class UpliftRiverCarver implements RTFRiverCarver {
 
     private float applyTerracing(float progress, float terraceMask, float drainageMask, float steps, float edgeWidth, float terraceStrength) {
         float intactTerrace = Math.max(0.0F, terraceMask - (drainageMask * 1.5F));
-        float effectiveStrength = NoiseUtil.lerp(intactTerrace, terraceStrength, 0.5F);
+        float maskStrength = NoiseUtil.clamp(intactTerrace * 1.5F, 0.0F, 1.0F);
+        float effectiveStrength = NoiseUtil.lerp(maskStrength, terraceStrength, 0.5F);
 
         if (effectiveStrength > 0.0F) {
             float steppedProgress = softStep(progress, steps, edgeWidth);
@@ -326,6 +330,12 @@ public class UpliftRiverCarver implements RTFRiverCarver {
     }
 
     private float softStep(float progress, float steps, float edgeWidth) {
+        if (progress <= 0.0F) return 0.0F;
+        if (progress >= 1.0F) return 1.0F;
+        if (edgeWidth <= 0.0F) {
+            return (float) Math.ceil(progress * steps) / steps;
+        }
+
         float scaled = progress * steps;
         float stepIndex = (float) Math.floor(scaled);
         float fractional = scaled - stepIndex; // 0..1 within each step
