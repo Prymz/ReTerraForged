@@ -115,12 +115,13 @@ public class UpliftRiverCarver implements RTFRiverCarver {
 
     @Override
     public void carve(Cell cell, float prevX, float prevZ, float prevT, float currX, float currZ, float currT) {
-        float warp = this.valleyWallWarpNoise.compute(currX * 0.1F, currZ * 0.1F, 9437);
-        float warpX = warp * 8.0F;
-        float warpZ = warp * 5.0F;
-
-        float distSqToCurr = this.getDistance2(currX + warpX, currZ + warpZ, currT);
+        // Unwarped — stable water channel, smooth bed profile
+        float distSqToCurr = this.getDistance2(currX, currZ, currT);
         float currentLinearDist = (float) Math.sqrt(distSqToCurr);
+
+        // Warped — organic valley wall shaping only
+        float warp = this.valleyWallWarpNoise.compute(currX * 0.1F, currZ * 0.1F, 9437);
+        float warpedLinearDist = (float) Math.sqrt(this.getDistance2(currX + warp * 8.0F, currZ + warp * 5.0F, currT));
 
         float flatnessInput = isUpliftContinent ? cell.waterTable : currT;
         float flatnessFactor = NoiseUtil.clamp(ContinentalHydrology.getFlatnessFactor(flatnessInput), 0.0F, 1.0F);
@@ -154,8 +155,11 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         float oceanHeightOffset = levels.water;
         float targetWaterLevel = ContinentalHydrology.getWeightedWaterHeight(cell.waterTable) + oceanHeightOffset;
 
+        float bedWidthSized = this.getScaledSize(currT, this.bedWidth);
+        // Scale bed depth proportionally to width: narrower rivers = shallower
+        float depthScaling = (float) Math.sqrt(bedWidthSized / this.bedWidth.max());
         float baseBedDepthOffset = oceanHeightOffset - config.bedHeight;
-        float bedDepthOffset = baseBedDepthOffset * dynamicDepthMult;
+        float bedDepthOffset = baseBedDepthOffset * dynamicDepthMult * depthScaling;
         float targetBedFloor = targetWaterLevel - bedDepthOffset;
 
         float bankHeightOffset = (config.maxBankHeight - config.minBankHeight);
@@ -222,7 +226,7 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         zone4Radius *= mountainNarrowing;
         zone4Radius = Math.max(zone4Radius, zone3Radius + zone3Width * 1.5F);
 
-        if (currentLinearDist >= zone4Radius) return;
+        if (warpedLinearDist >= zone4Radius) return;
 
         float slopeRoughness = 0.0F;
         float scarRaw = 0.0F;
@@ -244,13 +248,13 @@ public class UpliftRiverCarver implements RTFRiverCarver {
             if (cell.riverZone != RiverCarverSettings.RiverZone.Riverbed) {
                 cell.riverZone = RiverCarverSettings.RiverZone.Banks;
             }
-        } else if (currentLinearDist < zone3Radius) {
+        } else if (warpedLinearDist < zone3Radius) {
             finalHeight = carveZone3ValleyFloor(targetValleyFloor, terraceMask, drainageMask);
             if (cell.riverZone != RiverCarverSettings.RiverZone.Riverbed && cell.riverZone != RiverCarverSettings.RiverZone.Banks) {
                 cell.riverZone = RiverCarverSettings.RiverZone.ValleyFloor;
             }
         } else {
-            finalHeight = carveZone4Fadeout(cell.height, currentLinearDist, zone3Radius, zone4Radius, targetValleyFloor, terraceMask, drainageMask, flatnessFactor, slopeRoughness, scarRaw, fanNoise);
+            finalHeight = carveZone4Fadeout(cell.height, warpedLinearDist, zone3Radius, zone4Radius, targetValleyFloor, terraceMask, drainageMask, flatnessFactor, slopeRoughness, scarRaw, fanNoise);
             if (cell.riverZone != RiverCarverSettings.RiverZone.Riverbed && cell.riverZone != RiverCarverSettings.RiverZone.Banks && cell.riverZone != RiverCarverSettings.RiverZone.ValleyFloor) {
                 cell.riverZone = RiverCarverSettings.RiverZone.ValleyFadeout;
             }
@@ -259,8 +263,8 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         if (heightDiscrepancy > 0.0F) {
             // How far from the valley center? zone 1-3 = strong carve, zone 4 = blend more
             float distanceProgress = 0.0F;
-            if (currentLinearDist >= zone3Radius) {
-                distanceProgress = (currentLinearDist - zone3Radius) / (zone4Radius - zone3Radius);
+            if (warpedLinearDist >= zone3Radius) {
+                distanceProgress = (warpedLinearDist - zone3Radius) / (zone4Radius - zone3Radius);
                 distanceProgress = NoiseUtil.clamp(distanceProgress, 0.0F, 1.0F);
             }
 
