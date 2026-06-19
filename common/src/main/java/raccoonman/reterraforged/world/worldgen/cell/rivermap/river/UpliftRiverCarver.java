@@ -57,7 +57,7 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         this.fade = settings.fadeIn;
         this.fadeInv = 1.0F / settings.fadeIn;
 
-        this.bedWidth = new Range(0.25F, (float)(config.bedWidth * config.bedWidth));
+        this.bedWidth = new Range(1.5F, (float)(config.bedWidth * config.bedWidth));
 
         float erosionScale = 3.5F;
         float sqErosionScale = erosionScale * erosionScale;
@@ -175,6 +175,9 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         // --- RADII BOUNDARIES ---
         float biasedScale = sqScaleFactor * dynamicWidthMult * sideBias;
         float zone1Radius = (float) Math.sqrt(this.getScaledSize(currT, this.bedWidth) * biasedScale);
+
+        float baseZone1Radius = (float) Math.sqrt(this.getScaledSize(currT, this.bedWidth) * sqScaleFactor);
+        zone1Radius = Math.max(zone1Radius, baseZone1Radius);
 
         // --- ORGANIC LAKE SHORELINE WARPING MODULATION ---
         float plateauInput = isUpliftContinent ? cell.waterTable : currT;
