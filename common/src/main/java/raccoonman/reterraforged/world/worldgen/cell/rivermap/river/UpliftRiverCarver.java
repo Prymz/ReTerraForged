@@ -253,11 +253,16 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         return targetValleyFloor + (bumpiness * this.levels.unit);
     }
 
-    private float carveZone4Fadeout(float originalTerrainHeight, float distance, float zone3Radius, float zone4Radius, float targetValleyFloor, float terraceMask, float drainageMask) {
+    private float carveZone4Fadeout(float originalTerrainHeight, float distance,
+                                    float zone3Radius, float zone4Radius, float targetValleyFloor,
+                                    float terraceMask, float drainageMask) {
+
         float progress = (distance - zone3Radius) / (zone4Radius - zone3Radius);
         progress = NoiseUtil.clamp(progress, 0.0F, 1.0F);
 
-        float modifiedProgress = applyTerracing(progress, terraceMask, drainageMask, 5.0F, 0.9F);
+        // edgeWidth now controls riser width:
+        //   0.0 = no riser (fully smooth), 1.0 = riser fills entire step (very steep)
+        float modifiedProgress = applyTerracing(progress, terraceMask, drainageMask, 5.0F, 0.3F);
 
         float slopeMask = progress * (1.0F - progress) * 4.0F;
         modifiedProgress = Math.max(0.0F, modifiedProgress - (drainageMask * 0.25F * slopeMask));
@@ -278,37 +283,32 @@ public class UpliftRiverCarver implements RTFRiverCarver {
     }
 
     private float softStep(float progress, float steps, float edgeWidth) {
-        // Scale progress into step-space
         float scaled = progress * steps;
         float stepIndex = (float) Math.floor(scaled);
         float fractional = scaled - stepIndex; // 0..1 within each step
 
-        // The center of each step (where the flat terrace is)
-        float center = stepIndex + 0.5F;
-
-        // distance from center, normalized to 0..1 (0 = at center, 1 = at edge)
-        float distFromCenter = Math.abs(fractional - 0.5F) * 2.0F;
-
-        // edgeWidth controls how much of the step is "flat" vs "transition"
-        // edgeWidth = 1.0 → fully sharp (like Math.round)
-        // edgeWidth = 0.0 → fully smooth (no terracing at all)
-        // edgeWidth = 0.5 → half flat, half sloped transition
-        float flatPortion = NoiseUtil.clamp(1.0F - edgeWidth, 0.0F, 1.0F);
+        // We want the RISER (wall face) on the INNER side (low fractional)
+        // and the FLAT terrace on the OUTER side (high fractional)
+        //
+        // Think of each step as:
+        //   [0..riserWidth)  = riser zone  (steep, faces center)
+        //   [riserWidth..1)  = flat zone   (horizontal terrace)
+        //
+        float riserWidth = NoiseUtil.clamp(edgeWidth, 0.0F, 1.0F);
 
         float result;
-        if (distFromCenter < flatPortion) {
-            // On the flat part of the terrace — snap to the step center
-            result = center / steps;
-        } else {
-            // In the transition zone — interpolate to the next step
-            float transitionProgress = (distFromCenter - flatPortion) / edgeWidth;
-            transitionProgress = NoiseUtil.clamp(transitionProgress, 0.0F, 1.0F);
-            // Smooth the transition
+        if (fractional < riserWidth) {
+            // In the riser zone — transition from this step's floor up to the terrace level
+            float transitionProgress = fractional / riserWidth;
+            // Smooth with hermite interpolation
             transitionProgress = transitionProgress * transitionProgress * (3.0F - 2.0F * transitionProgress);
 
-            float lowerStep = stepIndex / steps;
-            float upperStep = (stepIndex + 1.0F) / steps;
-            result = NoiseUtil.lerp(lowerStep, upperStep, fractional < 0.5F ? (1.0F - transitionProgress) : transitionProgress);
+            float stepFloor = stepIndex / steps;
+            float stepCeiling = (stepIndex + 1.0F) / steps;
+            result = NoiseUtil.lerp(stepFloor, stepCeiling, transitionProgress);
+        } else {
+            // On the flat terrace — snap to the step ceiling
+            result = (stepIndex + 1.0F) / steps;
         }
 
         return result;
