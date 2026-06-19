@@ -111,10 +111,7 @@ public class Wetland {
             cell.riverWaterLevel = upliftOffset;
         }
 
-        if (dist >= tEnd) {
-            cell.terrain = TerrainType.WETLAND;
-            cell.erosionMask = true;
-        }
+        float featureEdge = Math.min(dist, warpedDist);
 
         float localMoundMin = localWaterSurface + (1.0F * singleBlock);
         float localMoundMax = localWaterSurface + (2.0F * singleBlock);
@@ -126,7 +123,15 @@ public class Wetland {
             float moundHeightNoise = this.moundHeight.compute(x, z, 0);
             float mounds = localMoundMin + (moundHeightNoise * localMoundVariance);
 
-            cell.height = NoiseUtil.lerp(cell.height, mounds, shapeAlpha * 0.8F);
+            float moundEdgeEnd = tEnd - 0.1F;
+            float moundEdgeFade = NoiseUtil.clamp((featureEdge - moundEdgeEnd)/(tEnd - moundEdgeEnd), 0.0F, 1.0F);
+
+            cell.height = NoiseUtil.lerp(cell.height, mounds, shapeAlpha * 0.8F * moundEdgeFade);
+        }
+
+        if (featureEdge > tEnd && cell.height < localWaterSurface + (5.0F * singleBlock)) {
+            cell.terrain = TerrainType.WETLAND;
+            cell.erosionMask = true;
         }
 
         cell.riverMask = Math.min(cell.riverMask, 1.0F - internalAlpha);
