@@ -34,6 +34,8 @@ public class UpliftRiverCarver implements RTFRiverCarver {
     private Noise depthNoise;
     private Noise terraceNoise;
     private Noise asymmetryNoise;
+    private Noise slopeRoughnessNoise;
+    private Noise scarNoise;
 
     // New Drainage Noises
     private Noise gullyNoise;
@@ -42,6 +44,7 @@ public class UpliftRiverCarver implements RTFRiverCarver {
     // Organic Lake Shoreline Distortion Noise
     private Noise lakeWarpNoise;
     public LakeConfig lakeConfig;
+    private Noise valleyWallWarpNoise;
 
     // --- PER-RIVER VARIANCE FIELDS ---
     private final float riverValleyWidthModifier;
@@ -79,6 +82,8 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         this.depthNoise = Noises.simplex(3912, 100, 2);
         this.terraceNoise = Noises.simplex(5510, 200, 1);
         this.asymmetryNoise = Noises.simplex(1193, 250, 1);
+        this.slopeRoughnessNoise = Noises.simplex(2847, 35, 2);
+        this.scarNoise = Noises.simplex(7392, 120, 1);
 
         // Drainage initialization
         this.gullyNoise = Noises.simplex(9876, 65, 2);
@@ -86,6 +91,7 @@ public class UpliftRiverCarver implements RTFRiverCarver {
 
         // Multi-octave simplex noise for complex, jagged lake boundaries (Scale 55, 3 Octaves)
         this.lakeWarpNoise = Noises.simplex(7439, 55, 3);
+        this.valleyWallWarpNoise = Noises.simplex(9437, 80, 3);
 
         this.lakeConfig = lakeConfig;
         this.isUpliftContinent = isUpliftContinent;
@@ -103,7 +109,10 @@ public class UpliftRiverCarver implements RTFRiverCarver {
 
     @Override
     public void carve(Cell cell, float prevX, float prevZ, float prevT, float currX, float currZ, float currT) {
-        float distSqToCurr = this.getDistance2(currX, currZ, currT);
+        float warpX = this.valleyWallWarpNoise.compute(currX * 0.5F, currZ * 0.5F, 1234) * 4.0F;
+        float warpZ = this.valleyWallWarpNoise.compute(currX * 0.5F, currZ * 0.5F, 5678) * 4.0F;
+
+        float distSqToCurr = this.getDistance2(currX + warpX, currZ + warpZ, currT);
         float currentLinearDist = (float) Math.sqrt(distSqToCurr);
 
         float flatnessInput = isUpliftContinent ? cell.waterTable : currT;
@@ -116,6 +125,9 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         float depthVar = this.depthNoise.compute(currX, currZ, 3912);
         float terraceMask = this.terraceNoise.compute(currX, currZ, 5510);
         float asymmetry = this.asymmetryNoise.compute(currX, currZ, 1193);
+        float slopeRoughness = this.slopeRoughnessNoise.compute(currX, currZ, 2847);
+        float scarRaw = this.scarNoise.compute(currX, currZ, 7392);
+        float fanNoise = this.gullyNoise.compute(currX, currZ, 9877);
 
         // --- DRAINAGE CALCULATION (Ridged Noise) ---
         float gullyRaw = this.gullyNoise.compute(currX, currZ, 9876);
@@ -144,7 +156,14 @@ public class UpliftRiverCarver implements RTFRiverCarver {
 
         float bankHeightOffset = (config.maxBankHeight - config.minBankHeight);
         float targetValleyFloor = targetWaterLevel + bankHeightOffset;
+        float originalTerrainHeight = cell.height;
+        float heightDiscrepancy = originalTerrainHeight - targetValleyFloor;
+        float mountainFactor = 1.0F - flatnessFactor;
+        float maxDiscrepancy = 200.0F * this.levels.unit; // tune this
+        float discrepancyFactor = NoiseUtil.clamp(heightDiscrepancy / maxDiscrepancy, 0.0F, 1.0F);
         float discrepancyScale = 1.0F + (levels.scale(cell.height - targetWaterLevel)) / 100.0F;
+        discrepancyScale = NoiseUtil.clamp(discrepancyScale, 1.0F, 6.0F);
+
 
         // --- RADII BOUNDARIES ---
         float biasedScale = sqScaleFactor * dynamicWidthMult * sideBias;
@@ -185,10 +204,13 @@ public class UpliftRiverCarver implements RTFRiverCarver {
 
         // --- APPLY PER-RIVER VARIANCE TO ZONE 3 VALLEY FLOOR ---
         float zone3Width = config.bankWidth * dynamicWidthMult * this.riverValleyWidthModifier;
-        float zone3Radius = zone2Radius + zone3Width;
+        float zone3Radius = (zone2Radius + zone3Width) * sideBias;
 
         // Zone 4 dynamically accommodates the changes automatically via the chain
         float zone4Radius = zone3Radius + (zone3Width * (4 + discrepancyScale));
+        float mountainNarrowing = 1.0F - (discrepancyFactor * mountainFactor * 0.5F);
+        zone4Radius *= mountainNarrowing;
+        zone4Radius = Math.max(zone4Radius, zone3Radius + zone3Width * 1.5F);
 
         if (currentLinearDist >= zone4Radius) return;
 
@@ -209,21 +231,13 @@ public class UpliftRiverCarver implements RTFRiverCarver {
                 cell.riverZone = RiverCarverSettings.RiverZone.ValleyFloor;
             }
         } else {
-            finalHeight = carveZone4Fadeout(cell.height, currentLinearDist, zone3Radius, zone4Radius, targetValleyFloor, terraceMask, drainageMask, flatnessFactor);
+            finalHeight = carveZone4Fadeout(cell.height, currentLinearDist, zone3Radius, zone4Radius, targetValleyFloor, terraceMask, drainageMask, flatnessFactor, slopeRoughness, scarRaw, fanNoise);
             if (cell.riverZone != RiverCarverSettings.RiverZone.Riverbed && cell.riverZone != RiverCarverSettings.RiverZone.Banks && cell.riverZone != RiverCarverSettings.RiverZone.ValleyFloor) {
                 cell.riverZone = RiverCarverSettings.RiverZone.ValleyFadeout;
             }
         }
 
-        float originalTerrainHeight = cell.height;
-        float heightDiscrepancy = originalTerrainHeight - targetValleyFloor;
-
         if (heightDiscrepancy > 0.0F) {
-            float mountainFactor = 1.0F - flatnessFactor;
-            // Normalize discrepancy: 0 = terrain at valley floor, 1 = very high above
-            float maxDiscrepancy = 200.0F * this.levels.unit; // tune this
-            float discrepancyFactor = NoiseUtil.clamp(heightDiscrepancy / maxDiscrepancy, 0.0F, 1.0F);
-
             // How far from the valley center? zone 1-3 = strong carve, zone 4 = blend more
             float distanceProgress = 0.0F;
             if (currentLinearDist >= zone3Radius) {
@@ -234,7 +248,7 @@ public class UpliftRiverCarver implements RTFRiverCarver {
             // In high-discrepancy terrain, the outer part of zone 4 retains more original slope
             // Inner zones keep full carve influence
             // Only strongly preserve original slope in steep/high-discrepancy terrain
-            float blendAmount = 0.5F * mountainFactor;
+            float blendAmount = 0.5F * mountainFactor * (1.0F + slopeRoughness * 0.3F);
             float carveInfluence = 1.0F - (distanceProgress * discrepancyFactor * blendAmount);
 
             finalHeight = NoiseUtil.lerp(originalTerrainHeight, finalHeight, carveInfluence);
@@ -276,7 +290,7 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         progress = applyTerracing(progress, terraceMask, drainageMask, bankSteps, bankEdgeWidth, bankTerraceStrength);
 
         // Drainage gullies are more aggressive on steep terrain
-        float drainageScale = NoiseUtil.lerp(0.2F, 0.3F, 1.0F - flatnessFactor);
+        float drainageScale = NoiseUtil.lerp(0.2F, 0.5F, 1.0F - flatnessFactor);
         float arc = progress * (1.0F - progress) * 4.0F;
         progress = Math.max(0.0F, progress - (drainageMask * drainageScale * arc));
 
@@ -291,30 +305,62 @@ public class UpliftRiverCarver implements RTFRiverCarver {
 
     private float carveZone4Fadeout(float originalTerrainHeight, float distance,
                                     float zone3Radius, float zone4Radius, float targetValleyFloor,
-                                    float terraceMask, float drainageMask, float flatnessFactor) {
+                                    float terraceMask, float drainageMask, float flatnessFactor,
+                                    float slopeRoughness, float scarRaw, float fanNoise) {
 
         float progress = (distance - zone3Radius) / (zone4Radius - zone3Radius);
         progress = NoiseUtil.clamp(progress, 0.0F, 1.0F);
 
-        // ADAPTIVE TERRACING: flat terrain gets fewer, wider steps;
-        // mountains get more, sharper steps
-        float terrainSteps = NoiseUtil.lerp(7.0F, 3.0F, flatnessFactor);        // flat=3, mountain=7 — already correct
-        float terrainEdgeWidth = NoiseUtil.lerp(0.25F, 0.6F, flatnessFactor);     // flat=0.6, mountain=0.25
-        float terrainTerraceStrength = NoiseUtil.lerp(0.8F, 0.5F, flatnessFactor); // flat=0.5, mountain=0.8
+        // Physical slope mask - strongest at mid-slope
+        float slopeMask = progress * (1.0F - progress) * 4.0F;
+
+        // Terracing + drainage on progress
+        float terrainSteps = NoiseUtil.lerp(7.0F, 3.0F, flatnessFactor) * (0.8F + terraceMask * 0.4F);
+        float terrainEdgeWidth = NoiseUtil.lerp(0.25F, 0.6F, flatnessFactor) * (0.7F + terraceMask * 0.6F);
+        float terrainTerraceStrength = NoiseUtil.lerp(0.8F, 0.5F, flatnessFactor);
         float modifiedProgress = applyTerracing(progress, terraceMask, drainageMask,
                 terrainSteps, terrainEdgeWidth, terrainTerraceStrength);
 
-        float slopeMask = progress * (1.0F - progress) * 4.0F;
-        modifiedProgress = Math.max(0.0F, modifiedProgress - (drainageMask * 0.25F * slopeMask));
+        // Profile shape: concave talus apron at base, steep cliff above
+        float profileProgress;
+        if (modifiedProgress < 0.35F) {
+            float p = modifiedProgress / 0.35F;
+            profileProgress = 0.35F * p * p * (3.0F - 2.0F * p); // goes 0 -> 0.35
+        } else {
+            float p = (modifiedProgress - 0.35F) / 0.65F;
+            profileProgress = 0.35F + p * 0.65F; // goes 0.35 -> 1
+        }
 
-        // ADAPTIVE PROFILE SHAPE:
-        // flatnessFactor → 1.0 (flat): nearly linear blend — gentle, wide floodplain
-        // flatnessFactor → 0.0 (steep): more concave — steep walls near valley,
-        //   flattening toward original terrain
-        float curveExponent = NoiseUtil.lerp(0.7F, 2.0F, flatnessFactor);
-        float shapedProgress = (float) Math.pow(modifiedProgress, curveExponent);
+        // Threshold slope clip
+        float thresholdAngle = NoiseUtil.lerp(45.0F, 22.0F, flatnessFactor);
+        float thresholdSlope = (float) Math.tan(Math.toRadians(thresholdAngle));
+        float horizontalDistance = distance - zone3Radius;
+        float maxRise = horizontalDistance * thresholdSlope;
+        float thresholdHeight = targetValleyFloor + maxRise;
 
-        return NoiseUtil.lerp(targetValleyFloor, originalTerrainHeight, shapedProgress);
+        float smoothHeight = NoiseUtil.lerp(targetValleyFloor, originalTerrainHeight, profileProgress);
+        float clippedHeight = Math.min(smoothHeight, thresholdHeight);
+
+        // Slope roughness
+        float roughnessAmount = slopeMask * (1.0F - flatnessFactor) * 4.0F * this.levels.unit;
+        float blendedHeight = clippedHeight + slopeRoughness * roughnessAmount;
+
+        // Gully notches
+        float gullyDepth = drainageMask * (1.0F - flatnessFactor) * 8.0F * this.levels.unit;
+        float finalHeight = blendedHeight - gullyDepth * slopeMask;
+
+        // Debris fans / talus apron at the base
+        float fanStrength = Math.max(0.0F, fanNoise) * (1.0F - flatnessFactor) * (1.0F - progress);
+        float fanHeight = fanStrength * 3.0F * this.levels.unit;
+
+        // Landslide scars
+        if (scarRaw > 0.92F) {
+            float scarDepth = (scarRaw - 0.92F) / 0.08F;
+            scarDepth *= scarDepth;
+            finalHeight -= scarDepth * (1.0F - flatnessFactor) * 10.0F * this.levels.unit * slopeMask;
+        }
+
+        return finalHeight + fanHeight;
     }
 
     private float applyTerracing(float progress, float terraceMask, float drainageMask, float steps, float edgeWidth, float terraceStrength) {
