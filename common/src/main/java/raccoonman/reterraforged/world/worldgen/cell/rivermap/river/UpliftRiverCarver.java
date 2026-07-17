@@ -47,7 +47,7 @@ public class UpliftRiverCarver implements RTFRiverCarver {
         this.fade = settings.fadeIn;
         this.fadeInv = 1.0F / settings.fadeIn;
 
-        this.bedWidth = new Range(0.25F, (float)(config.bedWidth * config.bedWidth));
+        this.bedWidth = new Range(1.5F, (float)(config.bedWidth * config.bedWidth));
 
         float erosionScale = 3.5F;
         float sqErosionScale = erosionScale * erosionScale;
@@ -121,7 +121,10 @@ public class UpliftRiverCarver implements RTFRiverCarver {
 
         // Zone radius calculations
         float biasedScale = scaleFactor * dynamicWidthMult * sideBias;
-        float zone1Radius = (float) Math.sqrt(this.getScaledSize(currT, this.bedWidth) * biasedScale);
+        float biasedZone1Radius = (float) Math.sqrt(this.getScaledSize(currT, this.bedWidth) * biasedScale);
+        float baseZone1Radius = (float) Math.sqrt(this.getScaledSize(currT, this.bedWidth));
+        float zone1Radius = Math.max(biasedZone1Radius, baseZone1Radius);
+
         float lakeMultiplier = getLakeMultiplier(cell, currT, currX, currZ, flatnessFactor);
         zone1Radius *= lakeMultiplier;
 
